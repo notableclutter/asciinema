@@ -254,6 +254,14 @@ fn parse_key<S: AsRef<str>>(key: S) -> Result<Key> {
     let key = key.as_ref();
     let chars: Vec<char> = key.chars().collect();
 
+    if let Some(fkey) = parse_function_key(key) {
+        return Ok(Some(fkey));
+    }
+
+    if let Some(byte) = parse_hex_key(key) {
+        return Ok(Some(vec![byte]));
+    }
+
     match chars.len() {
         0 => return Ok(None),
 
@@ -266,44 +274,9 @@ fn parse_key<S: AsRef<str>>(key: S) -> Result<Key> {
 
         2 => {
             if chars[0] == '^' && chars[1].is_ascii() {
-                let ctrl_byte = if chars[1].is_ascii_alphabetic() {
-                    chars[1].to_ascii_uppercase() as u8 - 0x40
-                } else {
-                    match chars[1] {
-                        '[' => 0x1b,
-                        '\\' => 0x1c,
-                        ']' => 0x1d,
-                        '^' => 0x1e,
-                        '_' => 0x1f,
-                        '?' => 0x7f,
-                        '0'..='9' => (chars[1] as u8) - 0x10,
-                        _ => return Err(anyhow!("invalid key definition '{key}'")),
-                    }
-                };
-
-                return Ok(Some(vec![ctrl_byte]));
-            }
-
-            if chars[0].eq_ignore_ascii_case(&'C')
-                && ['+', '-'].contains(&chars[1])
-                && chars[1].is_ascii()
-            {
-                let ctrl_byte = if chars[1].is_ascii_alphabetic() {
-                    chars[1].to_ascii_uppercase() as u8 - 0x40
-                } else {
-                    match chars[1] {
-                        '[' => 0x1b,
-                        '\\' => 0x1c,
-                        ']' => 0x1d,
-                        '^' => 0x1e,
-                        '_' => 0x1f,
-                        '?' => 0x7f,
-                        '0'..='9' => (chars[1] as u8) - 0x10,
-                        _ => return Err(anyhow!("invalid key definition '{key}'")),
-                    }
-                };
-
-                return Ok(Some(vec![ctrl_byte]));
+                if let Some(ctrl_byte) = ctrl_byte(chars[1]) {
+                    return Ok(Some(vec![ctrl_byte]));
+                }
             }
         }
 
@@ -312,102 +285,92 @@ fn parse_key<S: AsRef<str>>(key: S) -> Result<Key> {
                 && ['+', '-'].contains(&chars[1])
                 && chars[2].is_ascii()
             {
-                let ctrl_byte = if chars[2].is_ascii_alphabetic() {
-                    chars[2].to_ascii_uppercase() as u8 - 0x40
-                } else {
-                    match chars[2] {
-                        '[' => 0x1b,
-                        '\\' => 0x1c,
-                        ']' => 0x1d,
-                        '^' => 0x1e,
-                        '_' => 0x1f,
-                        '?' => 0x7f,
-                        '0'..='9' => (chars[2] as u8) - 0x10,
-                        _ => return Err(anyhow!("invalid key definition '{key}'")),
-                    }
-                };
-
-                return Ok(Some(vec![ctrl_byte]));
-            }
-
-            if chars[0] == '0' && chars[1] == 'x' {
-                let hex_digit = chars[2];
-
-                if hex_digit.is_ascii_hexdigit() {
-                    let byte = u8::from_str_radix(&hex_digit.to_string(), 16)
-                        .map_err(|_| anyhow!("invalid key definition '{key}'"))?;
-
-                    return Ok(Some(vec![byte]));
+                if let Some(ctrl_byte) = ctrl_byte(chars[2]) {
+                    return Ok(Some(vec![ctrl_byte]));
                 }
             }
         }
 
-        4 => {
-            if chars[0] == '0' && chars[1] == 'x' {
-                let hex_str = format!("{}{}", chars[2], chars[3]);
-
-                if hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
-                    let byte = u8::from_str_radix(&hex_str, 16)
-                        .map_err(|_| anyhow!("invalid key definition '{key}'"))?;
-
-                    return Ok(Some(vec![byte]));
-                }
-            }
-        }
-
-        _ => {
-            if let Some(fkey) = parse_function_key(&chars) {
-                return Ok(Some(fkey));
-            }
-        }
+        _ => (),
     }
 
     Err(anyhow!("invalid key definition '{key}'"))
 }
 
-fn parse_function_key(chars: &[char]) -> Option<Vec<u8>> {
-    if chars.len() < 6 {
+fn ctrl_byte(input: char) -> Option<u8> {
+    if !input.is_ascii() {
         return None;
     }
 
-    if chars[0] != 'C' || (chars[1] != '+' && chars[1] != '-') {
+    if input == '?' {
+        return Some(0x7f);
+    }
+
+    let upper = input.to_ascii_uppercase();
+    if upper.is_ascii_alphabetic() {
+        return Some(upper as u8 - 0x40);
+    }
+
+    match upper {
+        '@' | '[' | '\\' | ']' | '^' | '_' => Some((upper as u8) & 0x1f),
+        '0'..='9' => Some((upper as u8) & 0x1f),
+        _ => None,
+    }
+}
+
+fn parse_hex_key(key: &str) -> Option<u8> {
+    let hex_str = key.strip_prefix("0x")?;
+
+    if hex_str.is_empty() || hex_str.len() > 2 || !hex_str.chars().all(|c| c.is_ascii_hexdigit())
+    {
         return None;
     }
 
-    let prefix = if chars[2] == '<' && chars[chars.len() - 1] == '>' {
-        &chars[3..chars.len() - 1]
-    } else {
-        return None;
-    };
+    u8::from_str_radix(hex_str, 16).ok()
+}
 
-    if prefix.len() < 3 {
-        return None;
-    }
+fn parse_function_key(key: &str) -> Option<Vec<u8>> {
+    let key = key.trim();
 
-    if !prefix[0].eq_ignore_ascii_case(&'f') {
+    if !key.starts_with("C-") && !key.starts_with("c-") {
         return None;
     }
 
-    let fnum_str: String = prefix[1..].iter().collect();
+    let inner = key.strip_prefix("C-").or_else(|| key.strip_prefix("c-"))?;
 
-    let fnum = fnum_str.parse::<u8>().ok()?;
-    let fnum = fnum.saturating_sub(1);
+    if !inner.starts_with('<') || !inner.ends_with('>') {
+        return None;
+    }
 
-    let mut escape_seq = if fnum < 4 {
-        vec![0x1b, b'O', b'P' + fnum]
-    } else {
-        let n = fnum + 15;
-        let n_str = n.to_string();
-        let mut seq = vec![0x1b, b'['];
-        seq.extend(n_str.bytes());
-        seq.push(b'~');
-        seq
-    };
+    let label = &inner[1..inner.len() - 1];
+    let mut chars = label.chars();
+    let first = chars.next()?;
 
-    let last_idx = escape_seq.len() - 1;
-    escape_seq[last_idx] &= 0x1f;
+    if !first.eq_ignore_ascii_case(&'f') {
+        return None;
+    }
 
-    Some(escape_seq)
+    let number: u8 = chars.collect::<String>().parse().ok()?;
+
+    build_ctrl_function_key(number)
+}
+
+fn build_ctrl_function_key(number: u8) -> Option<Vec<u8>> {
+    match number {
+        1 => Some(b"\x1b[1;5P".to_vec()),
+        2 => Some(b"\x1b[1;5Q".to_vec()),
+        3 => Some(b"\x1b[1;5R".to_vec()),
+        4 => Some(b"\x1b[1;5S".to_vec()),
+        5 => Some(b"\x1b[15;5~".to_vec()),
+        6 => Some(b"\x1b[17;5~".to_vec()),
+        7 => Some(b"\x1b[18;5~".to_vec()),
+        8 => Some(b"\x1b[19;5~".to_vec()),
+        9 => Some(b"\x1b[20;5~".to_vec()),
+        10 => Some(b"\x1b[21;5~".to_vec()),
+        11 => Some(b"\x1b[23;5~".to_vec()),
+        12 => Some(b"\x1b[24;5~".to_vec()),
+        _ => None,
+    }
 }
 
 pub fn check_legacy_config_file() {
@@ -461,7 +424,7 @@ mod tests {
     fn test_parse_key_ctrl_non_alpha() {
         assert_eq!(parse_key("^]").unwrap(), Some(vec![0x1d]));
         assert_eq!(parse_key("^\\").unwrap(), Some(vec![0x1c]));
-        assert_eq!(parse_key("^6").unwrap(), Some(vec![0x06]));
+        assert_eq!(parse_key("^6").unwrap(), Some(vec![0x16]));
     }
 
     #[test]
@@ -475,15 +438,15 @@ mod tests {
     fn test_parse_key_function_keys() {
         assert_eq!(
             parse_key("C-<f10>").unwrap(),
-            Some(vec![0x1b, 0x5b, 0x32, 0x31, 0x1e])
+            Some(vec![0x1b, 0x5b, 0x32, 0x31, 0x3b, 0x35, 0x7e])
         );
         assert_eq!(
             parse_key("C-<f11>").unwrap(),
-            Some(vec![0x1b, 0x5b, 0x32, 0x33, 0x1f])
+            Some(vec![0x1b, 0x5b, 0x32, 0x33, 0x3b, 0x35, 0x7e])
         );
         assert_eq!(
             parse_key("C-<f12>").unwrap(),
-            Some(vec![0x1b, 0x5b, 0x32, 0x34, 0x00])
+            Some(vec![0x1b, 0x5b, 0x32, 0x34, 0x3b, 0x35, 0x7e])
         );
     }
 
