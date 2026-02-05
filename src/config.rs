@@ -332,11 +332,13 @@ fn parse_hex_key(key: &str) -> Option<u8> {
 fn parse_function_key(key: &str) -> Option<Vec<u8>> {
     let key = key.trim();
 
-    if !key.starts_with("C-") && !key.starts_with("c-") {
+    let inner = if let Some(rest) = key.strip_prefix("C-") {
+        rest
+    } else if let Some(rest) = key.strip_prefix("c-") {
+        rest
+    } else {
         return None;
-    }
-
-    let inner = key.strip_prefix("C-").or_else(|| key.strip_prefix("c-"))?;
+    };
 
     if !inner.starts_with('<') || !inner.ends_with('>') {
         return None;
